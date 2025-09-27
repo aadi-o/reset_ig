@@ -1,283 +1,324 @@
 /**
- * Instagram Reset Telegram Bot (Node.js)
+ * Instagram Reset Telegram Bot (Node.js) - v2.0
  *
- * This bot provides functionality to send password reset links to Instagram accounts.
- * The mandatory channel join feature has been removed.
+ * A completely rewritten, robust, and well-documented script for the Instagram
+ * password reset bot. This version focuses on clarity, error handling, and a
+ * better user experience.
  */
 
+// ============================================================================
 // Step 1: Setup and Configuration
+// ============================================================================
+
+// The 'dotenv' package loads environment variables from a .env file for local development.
+// On Render, these variables are set in the dashboard.
 require('dotenv').config();
+
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 
 // --- Configuration ---
-// It's recommended to use environment variables for security.
-const BOT_TOKEN = process.env.BOT_TOKEN || '8241335689:AAHsumj1Kb_S9rzJfSFYymL_uKHOHPjh22Y';
+// The bot token is read from environment variables. A fallback is provided for local testing.
+const BOT_TOKEN = process.env.BOT_TOKEN || 'YOUR_BOT_TOKEN_HERE';
 
-// Initialize the bot
+// --- Initialization ---
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-// In-memory state storage for simplicity.
-// For production, a database like Redis would be more robust.
+// A simple in-memory object to track the state of each user (e.g., waiting for input).
 const userStates = {};
 
-// --- Instagram API Constants (for headers) ---
-const constants = {
+// Constants for Instagram API requests to avoid magic strings.
+const INSTAGRAM_API = {
     USER_AGENT_WEB: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    USER_AGENT_MOBILE: 'Instagram 6.12.1 Android (30/11; 480dpi; 1080x2004; HONOR; ANY-LX2; HNANY-Q1; qcom; ar_EG_#u-nu-arab)',
-    IG_APP_ID: '936619743392459'
+    USER_AGENT_MOBILE: 'Instagram 27.0.0.7.97 Android (24/7.0; 120dpi; 720x1280; samsung; SM-G935F; herolte; samsungexynos8890; en_US)',
+    APP_ID: '936619743392459',
 };
 
-// Step 2: Instagram Reset Functions
+// ============================================================================
+// Step 2: Instagram API Functions
+// ============================================================================
 
 /**
- * Method 1: Tries to send a reset link via a web endpoint.
- * @param {string} usernameOrEmail - The target username or email.
- * @returns {Promise<{success: boolean, message: string}>}
+ * A wrapper for making robust POST requests with detailed error handling.
+ * @param {string} url - The URL to send the request to.
+ * @param {URLSearchParams} data - The data to send in the request body.
+ * @param {object} headers - The request headers.
+ * @returns {Promise<object>} The response data from the server.
+ * @throws {Error} Throws an error with a user-friendly message if the request fails.
  */
-async function sendResetMethod1(usernameOrEmail) {
+async function makePostRequest(url, data, headers) {
+    try {
+        const response = await axios.post(url, data, { headers });
+        return response.data;
+    } catch (error) {
+        if (error.response) {
+            // The request was made and the server responded with a status code
+            // that falls out of the range of 2xx
+            const status = error.response.status;
+            const errorData = error.response.data;
+            if (status === 429) {
+                throw new Error('Rate Limited. Please wait a while before trying again.');
+            }
+            // Try to get a specific message from Instagram's response
+            const message = errorData?.message || `Request failed with status code ${status}`;
+            throw new Error(message);
+        } else if (error.request) {
+            // The request was made but no response was received
+            throw new Error('No response from Instagram. Check your network connection.');
+        } else {
+            // Something happened in setting up the request that triggered an Error
+            throw new Error(`An unexpected error occurred: ${error.message}`);
+        }
+    }
+}
+
+
+/**
+ * Method 1: Sends a reset link using a standard web ajax endpoint.
+ * @param {string} target - The Instagram username or email.
+ * @returns {Promise<{success: boolean, message: string}>} Result of the operation.
+ */
+async function sendResetMethod1(target) {
     try {
         const url = 'https://www.instagram.com/accounts/account_recovery_send_ajax/';
+        const data = new URLSearchParams({ email_or_username: target, recaptcha_challenge_field: '' });
         const headers = {
-            'User-Agent': constants.USER_AGENT_WEB,
+            'User-Agent': INSTAGRAM_API.USER_AGENT_WEB,
             'Referer': 'https://www.instagram.com/accounts/password/reset/',
-            'X-CSRFToken': 'missing', // This endpoint is often lenient with CSRF
-            'X-Requested-With': 'XMLHttpRequest'
+            'X-Requested-With': 'XMLHttpRequest',
         };
-        const data = new URLSearchParams({
-            email_or_username: usernameOrEmail,
-            recaptcha_challenge_field: ''
-        });
-
-        const response = await axios.post(url, data, { headers });
-        const emailMatch = response.data.match(/<b>(.*?)<\/b>/);
+        const response = await makePostRequest(url, data, headers);
+        const emailMatch = typeof response === 'string' && response.match(/<b>(.*?)<\/b>/);
         const email = emailMatch ? emailMatch[1] : 'an associated email';
         return { success: true, message: `Reset link sent to ${email}.` };
     } catch (error) {
-        return { success: false, message: 'Method 1 failed.' };
+        return { success: false, message: error.message };
     }
 }
 
 /**
- * Method 2: Tries to get user ID and send a reset link via a mobile API endpoint.
- * @param {string} username - The target username.
- * @returns {Promise<{success: boolean, message: string}>}
+ * Method 2: Sends a reset link using a mobile API endpoint after fetching the user's ID.
+ * @param {string} target - The Instagram username.
+ * @returns {Promise<{success: boolean, message: string}>} Result of the operation.
  */
-async function sendResetMethod2(username) {
-    let userId;
+async function sendResetMethod2(target) {
     try {
-        const profileUrl = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${username}`;
-        const profileHeaders = {
-            'User-Agent': constants.USER_AGENT_WEB,
-            'X-IG-App-ID': constants.IG_APP_ID
-        };
-        const profileResponse = await axios.get(profileUrl, { headers: profileHeaders });
-        userId = profileResponse.data.data.user.id;
-    } catch (error) {
-        return { success: false, message: `Could not find user ID for @${username}.` };
-    }
+        // First, get the user ID from the username
+        const profileUrl = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${target}`;
+        const profileResponse = await axios.get(profileUrl, { headers: { 'User-Agent': INSTAGRAM_API.USER_AGENT_WEB, 'X-IG-App-ID': INSTAGRAM_API.APP_ID } });
+        const userId = profileResponse.data?.data?.user?.id;
 
-    try {
+        if (!userId) {
+            return { success: false, message: 'Could not find a user with that username.' };
+        }
+
+        // Now, send the password reset request
         const resetUrl = 'https://i.instagram.com/api/v1/accounts/send_password_reset/';
-        const resetHeaders = {
-            'User-Agent': constants.USER_AGENT_MOBILE,
-            'Accept-Language': 'en-US'
-        };
-        const data = new URLSearchParams({
-            user_id: userId,
-            device_id: `android-${uuidv4()}`
-        });
-
-        const response = await axios.post(resetUrl, data, { headers: resetHeaders });
-        const email = response.data.obfuscated_email;
+        const data = new URLSearchParams({ user_id: userId, device_id: `android-${uuidv4()}` });
+        const headers = { 'User-Agent': INSTAGRAM_API.USER_AGENT_MOBILE };
+        const response = await makePostRequest(resetUrl, data, headers);
+        const email = response.obfuscated_email || 'an associated email';
         return { success: true, message: `Reset link sent to ${email}.` };
     } catch (error) {
-        return { success: false, message: `Failed to send reset request for @${username}.` };
+        return { success: false, message: error.message };
     }
 }
 
+/**
+ * Method 3: Sends a reset link using an alternative web API endpoint.
+ * @param {string} target - The Instagram username or email.
+ * @returns {Promise<{success: boolean, message: string}>} Result of the operation.
+ */
+async function sendResetMethod3(target) {
+    try {
+        const url = 'https://www.instagram.com/api/v1/web/accounts/account_recovery_send_ajax/';
+        const data = new URLSearchParams({ email_or_username: target, flow: 'fxcal' });
+        const headers = {
+            'Accept': '*/*',
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Origin': 'https://www.instagram.com',
+            'Referer': 'https://www.instagram.com/accounts/password/reset/',
+            'User-Agent': INSTAGRAM_API.USER_AGENT_WEB,
+            'X-CSRFToken': 'missing', // This endpoint is often lenient
+            'X-IG-App-ID': INSTAGRAM_API.APP_ID,
+            'X-Requested-With': 'XMLHttpRequest',
+        };
+        const response = await makePostRequest(url, data, headers);
+        if (response.status === 'ok') {
+            return { success: true, message: 'Reset link sent successfully.' };
+        }
+        return { success: false, message: response.message || 'An unknown error occurred.' };
+    } catch (error) {
+        return { success: false, message: error.message };
+    }
+}
+
+// ============================================================================
+// Step 3: Core Bot Logic
+// ============================================================================
 
 /**
- * Processes all reset methods for a single target.
- * @param {string} target - The username or email.
- * @returns {Promise<string>} - A formatted string of results.
+ * Runs all available reset methods for a single target and formats the results.
+ * @param {string} target - The Instagram username or email.
+ * @returns {Promise<string>} A formatted string containing the results of all methods.
  */
 async function processSingleTarget(target) {
     const results = [];
-    
-    const res1 = await sendResetMethod1(target);
-    results.push(`METHOD 1: ${res1.message}`);
+    const methods = [sendResetMethod1, sendResetMethod2, sendResetMethod3];
 
-    const res2 = await sendResetMethod2(target);
-    results.push(`METHOD 2: ${res2.message}`);
-
-    // You can add more methods here if needed
-    // const res3 = await sendResetMethod3(target);
-    // results.push(`METHOD 3: ${res3.message}`);
+    for (let i = 0; i < methods.length; i++) {
+        const result = await methods[i](target);
+        const icon = result.success ? '✅' : '❌';
+        results.push(`${icon} *Method ${i + 1}:* ${result.message}`);
+    }
 
     return results.join('\n');
 }
 
 /**
- * Processes a list of targets for bulk reset.
- * @param {string[]} targets - An array of usernames or emails.
- * @param {number} chatId - The chat ID to send progress updates to.
+ * Processes a list of targets sequentially, sending progress updates to the user.
+ * @param {string[]} targets - An array of Instagram usernames or emails.
+ * @param {number} chatId - The chat ID to send updates and results to.
  */
 async function processBulkTargets(targets, chatId) {
     const allResults = [];
     for (let i = 0; i < targets.length; i++) {
         const target = targets[i].trim();
-        if (target) {
-            await bot.sendMessage(chatId, `⏳ Processing ${i + 1}/${targets.length}: ${target}`);
-            const result = await processSingleTarget(target);
-            allResults.push(`🎯 Target: ${target}\n${result}`);
-            await new Promise(resolve => setTimeout(resolve, 2000)); // 2-second delay
-        }
+        if (!target) continue; // Skip empty lines
+
+        await bot.sendMessage(chatId, `⏳ Processing ${i + 1}/${targets.length}: *${target}*`, { parse_mode: 'Markdown' });
+        const result = await processSingleTarget(target);
+        allResults.push(`🎯 *Target: ${target}*\n${result}`);
+
+        // Add a delay between requests to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 2000));
     }
-    await bot.sendMessage(chatId, `✅ Bulk Processing Complete!\n\n---\n\n${allResults.join('\n\n---\n\n')}`);
+    await bot.sendMessage(chatId, `🎉 *Bulk Processing Complete!* 🎉\n\n---\n\n${allResults.join('\n\n---\n\n')}`, { parse_mode: 'Markdown' });
 }
 
-
-// Step 3: Bot Command and Message Handlers
+// ============================================================================
+// Step 4: Bot Command and Message Handlers
+// ============================================================================
 
 /**
- * Displays the main menu of the bot.
- * @param {number} chatId - The chat ID to send the menu to.
+ * Sends the main welcome menu with command buttons.
+ * @param {number} chatId The chat ID to send the menu to.
  */
 function showMainMenu(chatId) {
     const welcomeMessage = `
 🤖 *Welcome to the Instagram Password Reset Bot*
 
-You can use this bot to send password reset links to Instagram accounts.
+Use the commands below to get started.
 
-*Available Commands:*
 /reset - Reset a single account.
-/bulk_reset - Reset multiple accounts at once.
-/help - Show the help guide.
+/bulk_reset - Reset multiple accounts.
+/help - Show this guide again.
     `;
     bot.sendMessage(chatId, welcomeMessage, {
         parse_mode: 'Markdown',
         reply_markup: {
             keyboard: [
                 [{ text: '/reset' }, { text: '/bulk_reset' }],
-                [{ text: '/help' }]
+                [{ text: '/help' }],
             ],
-            resize_keyboard: true
-        }
+            resize_keyboard: true,
+        },
     });
 }
 
-// Handler for the /start command
-bot.onText(/\/start/, (msg) => {
+bot.onText(/\/start|\/help/, (msg) => {
     showMainMenu(msg.chat.id);
 });
 
-// Handler for the /help command
-bot.onText(/\/help/, (msg) => {
-    const helpMessage = `
-📖 *Help Guide*
-
-*Commands:*
-/reset - Prompts you to enter a single Instagram username or email to send a password reset link to.
-
-/bulk_reset - Prompts you to enter a list of Instagram usernames or emails (one per line). The bot will process them one by one.
-
-*How to Use:*
-1. Select a command from the menu or type it.
-2. Follow the on-screen instructions and provide the requested username(s) or email(s).
-3. The bot will attempt multiple methods to send the reset link and report the results.
-    `;
-    bot.sendMessage(msg.chat.id, helpMessage, { parse_mode: 'Markdown' });
-});
-
-// Handler for the /reset command
 bot.onText(/\/reset/, (msg) => {
-    const userId = msg.from.id;
-    userStates[userId] = 'awaiting_reset_target';
-    bot.sendMessage(msg.chat.id, '🔑 Please enter the Instagram username or email:');
+    userStates[msg.from.id] = 'awaiting_single_target';
+    bot.sendMessage(msg.chat.id, '🔑 Please enter the Instagram username or email for the account you want to reset:');
 });
 
-// Handler for the /bulk_reset command
 bot.onText(/\/bulk_reset/, (msg) => {
-    const userId = msg.from.id;
-    userStates[userId] = 'awaiting_bulk_targets';
-    const bulkMessage = `
-📝 *Bulk Reset*
-
-Please enter multiple Instagram usernames or emails. Each one should be on a new line.
-
-*Example:*
-username1
-another_user
-user@example.com
-    `;
-    bot.sendMessage(msg.chat.id, bulkMessage, { parse_mode: 'Markdown' });
+    userStates[msg.from.id] = 'awaiting_bulk_targets';
+    bot.sendMessage(msg.chat.id, '📝 Please enter up to 50 Instagram usernames or emails, each on a new line.');
 });
 
-// General message handler to process user input based on their state
+// This handler catches any message that isn't a command.
 bot.on('message', async (msg) => {
-    // Ignore commands, as they are handled by their specific listeners
-    if (msg.text.startsWith('/')) {
-        return;
-    }
+    if (msg.text.startsWith('/')) return; // Ignore commands
 
     const userId = msg.from.id;
-    const state = userStates[userId];
+    const currentState = userStates[userId];
 
-    if (!state) {
+    if (!currentState) {
         showMainMenu(msg.chat.id);
         return;
     }
 
-    if (state === 'awaiting_reset_target') {
+    // --- State: Awaiting Single Target ---
+    if (currentState === 'awaiting_single_target') {
         const target = msg.text.trim();
-        await bot.sendMessage(msg.chat.id, `⏳ Processing reset for *${target}*... This might take a moment.`, { parse_mode: 'Markdown' });
-        
+        await bot.sendMessage(msg.chat.id, `⏳ Processing reset for *${target}*... Please wait.`, { parse_mode: 'Markdown' });
+
         try {
-            const result = await processSingleTarget(target);
-            await bot.sendMessage(msg.chat.id, `📊 *Results for ${target}:*\n\n${result}`, { parse_mode: 'Markdown' });
+            const results = await processSingleTarget(target);
+            await bot.sendMessage(msg.chat.id, `📊 *Results for ${target}*\n\n${results}`, { parse_mode: 'Markdown' });
         } catch (error) {
-            await bot.sendMessage(msg.chat.id, '❌ An unexpected error occurred. Please try again.');
-            console.error(`Error processing single target ${target}:`, error);
+            console.error('Error during single target processing:', error);
+            await bot.sendMessage(msg.chat.id, 'An unexpected error occurred. Please try again later.');
         } finally {
-            delete userStates[userId]; // Clear the user's state
+            delete userStates[userId]; // Reset state
         }
     }
 
-    if (state === 'awaiting_bulk_targets') {
-        const targets = msg.text.trim().split('\n').filter(t => t); // Filter out empty lines
+    // --- State: Awaiting Bulk Targets ---
+    if (currentState === 'awaiting_bulk_targets') {
+        const targets = msg.text.trim().split('\n').filter(Boolean); // Split by line and remove empty ones
+
         if (targets.length === 0) {
-            bot.sendMessage(msg.chat.id, '⚠️ No targets provided. Please enter at least one username or email.');
+            bot.sendMessage(msg.chat.id, '⚠️ No valid targets were entered. Please provide at least one username or email.');
             return;
         }
         if (targets.length > 50) {
-            bot.sendMessage(msg.chat.id, '❌ The maximum number of targets for a bulk request is 50.');
+            bot.sendMessage(msg.chat.id, '❌ You entered more than 50 targets. Please reduce the list and try again.');
             return;
         }
 
-        await bot.sendMessage(msg.chat.id, `⏳ Starting bulk reset for *${targets.length}* targets...`, { parse_mode: 'Markdown' });
+        await bot.sendMessage(msg.chat.id, `🚀 Starting bulk reset for *${targets.length}* targets...`, { parse_mode: 'Markdown' });
         
         try {
-            // No need to wrap this in a thread in Node.js, async operations are non-blocking
             await processBulkTargets(targets, msg.chat.id);
         } catch (error) {
-            await bot.sendMessage(msg.chat.id, '❌ An unexpected error occurred during the bulk process. Please try again.');
-            console.error(`Error processing bulk targets:`, error);
+            console.error('Error during bulk target processing:', error);
+            await bot.sendMessage(msg.chat.id, 'An unexpected error occurred during the bulk process. Please try again later.');
         } finally {
-            delete userStates[userId]; // Clear the user's state
+            delete userStates[userId]; // Reset state
         }
     }
 });
 
 
-// Step 4: Start the Bot
-console.log('Bot is starting...');
+// ============================================================================
+// Step 5: Start the Bot and Handle Errors
+// ============================================================================
+
+console.log('Bot is starting up...');
+
 bot.on('polling_error', (error) => {
-    console.error(`Polling error: ${error.code} - ${error.message}`);
+    // This event is fired when the polling mechanism encounters an error.
+    console.error(`[Polling Error] Code: ${error.code} - Message: ${error.message}`);
+    // A 409 conflict means another instance is running. Other errors might be network-related.
+    if (error.code === 'ETELEGRAM' && error.message.includes('409 Conflict')) {
+        console.error('!!! Critical Error: Another bot instance is running with the same token. Shutting down. !!!');
+        process.exit(1); // Exit the process to prevent conflict loops.
+    }
 });
 
 process.on('unhandledRejection', (reason, promise) => {
     console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
+
+process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception:', error);
+});
+
+console.log('Bot is running successfully and polling for messages.');
 
