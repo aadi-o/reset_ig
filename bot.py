@@ -22,7 +22,7 @@ load_dotenv()
 
 # --- Configuration ---
 # The bot token is read from environment variables. A fallback is provided for local testing.
-BOT_TOKEN = os.getenv('BOT_TOKEN', '7852130119:AAFQ_cPJLRqOeHFgoaH7ARUU2DqkGWC_VPo')
+BOT_TOKEN = os.getenv('BOT_TOKEN', '8285668557:AAFrZi-pgsAK2uZtmVOhqWyyM4l0BgfKYGM')
 
 # --- Initialization ---
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
