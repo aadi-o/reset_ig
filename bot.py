@@ -22,7 +22,7 @@ load_dotenv()
 
 # --- Configuration ---
 # The bot token is read from environment variables. A fallback is provided for local testing.
-BOT_TOKEN = os.getenv('BOT_TOKEN', '7852130119:AAFYmkU3Dn5g_D-7HDCW29zcIUM7o-iemCE')
+BOT_TOKEN = os.getenv('BOT_TOKEN', '7852130119:AAFQ_cPJLRqOeHFgoaH7ARUU2DqkGWC_VPo')
 
 # --- Initialization ---
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
@@ -249,3 +249,4 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"An error occurred during polling: {e}")
     print('Bot has stopped.')
+
