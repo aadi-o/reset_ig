@@ -20,7 +20,7 @@ const { v4: uuidv4 } = require('uuid');
 
 // --- Configuration ---
 // The bot token is read from environment variables. A fallback is provided for local testing.
-const BOT_TOKEN = process.env.BOT_TOKEN || 'YOUR_BOT_TOKEN_HERE';
+const BOT_TOKEN = process.env.BOT_TOKEN || '7852130119:AAFYmkU3Dn5g_D-7HDCW29zcIUM7o-iemCE';
 
 // --- Initialization ---
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
