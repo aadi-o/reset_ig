@@ -1,7 +1,7 @@
 {
-  "name": "telegram-ig-reset-bot",
-  "version": "1.0.0",
-  "description": "A Telegram bot to send Instagram password reset links.",
+  "name": "telegram-ig-reset-bot-v2",
+  "version": "2.0.0",
+  "description": "A robust Telegram bot to send Instagram password reset links.",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
