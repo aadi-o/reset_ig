@@ -13,7 +13,7 @@ const { v4: uuidv4 } = require('uuid');
 
 // --- Configuration ---
 // It's recommended to use environment variables for security.
-const BOT_TOKEN = process.env.BOT_TOKEN || 'YOUR_BOT_TOKEN_HERE';
+const BOT_TOKEN = process.env.BOT_TOKEN || '8241335689:AAG6yKJFH6tAW2U2LWijubJifo1ep1mLM5U';
 
 // Initialize the bot
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
