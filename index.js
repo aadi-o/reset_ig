@@ -1,9 +1,9 @@
 /**
- * Instagram Reset Telegram Bot (Node.js) - v2.0
+ * Instagram Reset Telegram Bot (Node.js) - v2.1 (Patched)
  *
  * A completely rewritten, robust, and well-documented script for the Instagram
  * password reset bot. This version focuses on clarity, error handling, and a
- * better user experience.
+ * better user experience. Includes fix for Markdown parsing errors.
  */
 
 // ============================================================================
@@ -36,7 +36,22 @@ const INSTAGRAM_API = {
 };
 
 // ============================================================================
-// Step 2: Instagram API Functions
+// Step 2: Utilities
+// ============================================================================
+
+/**
+ * Escapes special characters in a string for Telegram's MarkdownV2 parse mode.
+ * @param {string} text The text to escape.
+ * @returns {string} The escaped text.
+ */
+const escapeMarkdownV2 = (text) => {
+    if (typeof text !== 'string') return '';
+    return text.replace(/_|\*|\[|\]|\(|\)|~|`|>|#|\+|-|=|\||{|}|\.|!/g, '\\$&');
+};
+
+
+// ============================================================================
+// Step 3: Instagram API Functions
 // ============================================================================
 
 /**
@@ -53,21 +68,16 @@ async function makePostRequest(url, data, headers) {
         return response.data;
     } catch (error) {
         if (error.response) {
-            // The request was made and the server responded with a status code
-            // that falls out of the range of 2xx
             const status = error.response.status;
             const errorData = error.response.data;
             if (status === 429) {
                 throw new Error('Rate Limited. Please wait a while before trying again.');
             }
-            // Try to get a specific message from Instagram's response
             const message = errorData?.message || `Request failed with status code ${status}`;
             throw new Error(message);
         } else if (error.request) {
-            // The request was made but no response was received
             throw new Error('No response from Instagram. Check your network connection.');
         } else {
-            // Something happened in setting up the request that triggered an Error
             throw new Error(`An unexpected error occurred: ${error.message}`);
         }
     }
@@ -104,7 +114,6 @@ async function sendResetMethod1(target) {
  */
 async function sendResetMethod2(target) {
     try {
-        // First, get the user ID from the username
         const profileUrl = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${target}`;
         const profileResponse = await axios.get(profileUrl, { headers: { 'User-Agent': INSTAGRAM_API.USER_AGENT_WEB, 'X-IG-App-ID': INSTAGRAM_API.APP_ID } });
         const userId = profileResponse.data?.data?.user?.id;
@@ -113,7 +122,6 @@ async function sendResetMethod2(target) {
             return { success: false, message: 'Could not find a user with that username.' };
         }
 
-        // Now, send the password reset request
         const resetUrl = 'https://i.instagram.com/api/v1/accounts/send_password_reset/';
         const data = new URLSearchParams({ user_id: userId, device_id: `android-${uuidv4()}` });
         const headers = { 'User-Agent': INSTAGRAM_API.USER_AGENT_MOBILE };
@@ -140,7 +148,7 @@ async function sendResetMethod3(target) {
             'Origin': 'https://www.instagram.com',
             'Referer': 'https://www.instagram.com/accounts/password/reset/',
             'User-Agent': INSTAGRAM_API.USER_AGENT_WEB,
-            'X-CSRFToken': 'missing', // This endpoint is often lenient
+            'X-CSRFToken': 'missing',
             'X-IG-App-ID': INSTAGRAM_API.APP_ID,
             'X-Requested-With': 'XMLHttpRequest',
         };
@@ -155,7 +163,7 @@ async function sendResetMethod3(target) {
 }
 
 // ============================================================================
-// Step 3: Core Bot Logic
+// Step 4: Core Bot Logic
 // ============================================================================
 
 /**
@@ -170,7 +178,7 @@ async function processSingleTarget(target) {
     for (let i = 0; i < methods.length; i++) {
         const result = await methods[i](target);
         const icon = result.success ? '✅' : '❌';
-        results.push(`${icon} *Method ${i + 1}:* ${result.message}`);
+        results.push(`${icon} *Method ${i + 1}:* ${escapeMarkdownV2(result.message)}`);
     }
 
     return results.join('\n');
@@ -185,20 +193,20 @@ async function processBulkTargets(targets, chatId) {
     const allResults = [];
     for (let i = 0; i < targets.length; i++) {
         const target = targets[i].trim();
-        if (!target) continue; // Skip empty lines
+        if (!target) continue;
 
-        await bot.sendMessage(chatId, `⏳ Processing ${i + 1}/${targets.length}: *${target}*`, { parse_mode: 'Markdown' });
+        const escapedTarget = escapeMarkdownV2(target);
+        await bot.sendMessage(chatId, `⏳ Processing ${i + 1}/${targets.length}: *${escapedTarget}*`, { parse_mode: 'MarkdownV2' });
         const result = await processSingleTarget(target);
-        allResults.push(`🎯 *Target: ${target}*\n${result}`);
+        allResults.push(`🎯 *Target: ${escapedTarget}*\n${result}`);
 
-        // Add a delay between requests to avoid rate limiting
         await new Promise(resolve => setTimeout(resolve, 2000));
     }
-    await bot.sendMessage(chatId, `🎉 *Bulk Processing Complete!* 🎉\n\n---\n\n${allResults.join('\n\n---\n\n')}`, { parse_mode: 'Markdown' });
+    await bot.sendMessage(chatId, `🎉 *Bulk Processing Complete\\!* 🎉\n\n---\n\n${allResults.join('\n\n---\n\n')}`, { parse_mode: 'MarkdownV2' });
 }
 
 // ============================================================================
-// Step 4: Bot Command and Message Handlers
+// Step 5: Bot Command and Message Handlers
 // ============================================================================
 
 /**
@@ -209,14 +217,14 @@ function showMainMenu(chatId) {
     const welcomeMessage = `
 🤖 *Welcome to the Instagram Password Reset Bot*
 
-Use the commands below to get started.
+Use the commands below to get started\\.
 
-/reset - Reset a single account.
-/bulk_reset - Reset multiple accounts.
-/help - Show this guide again.
+/reset \\- Reset a single account\\.
+/bulk\\_reset \\- Reset multiple accounts\\.
+/help \\- Show this guide again\\.
     `;
     bot.sendMessage(chatId, welcomeMessage, {
-        parse_mode: 'Markdown',
+        parse_mode: 'MarkdownV2',
         reply_markup: {
             keyboard: [
                 [{ text: '/reset' }, { text: '/bulk_reset' }],
@@ -241,9 +249,8 @@ bot.onText(/\/bulk_reset/, (msg) => {
     bot.sendMessage(msg.chat.id, '📝 Please enter up to 50 Instagram usernames or emails, each on a new line.');
 });
 
-// This handler catches any message that isn't a command.
 bot.on('message', async (msg) => {
-    if (msg.text.startsWith('/')) return; // Ignore commands
+    if (msg.text.startsWith('/')) return;
 
     const userId = msg.from.id;
     const currentState = userStates[userId];
@@ -253,25 +260,24 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // --- State: Awaiting Single Target ---
     if (currentState === 'awaiting_single_target') {
         const target = msg.text.trim();
-        await bot.sendMessage(msg.chat.id, `⏳ Processing reset for *${target}*... Please wait.`, { parse_mode: 'Markdown' });
+        const escapedTarget = escapeMarkdownV2(target);
+        await bot.sendMessage(msg.chat.id, `⏳ Processing reset for *${escapedTarget}*\\.\\.\\. Please wait\\.`, { parse_mode: 'MarkdownV2' });
 
         try {
             const results = await processSingleTarget(target);
-            await bot.sendMessage(msg.chat.id, `📊 *Results for ${target}*\n\n${results}`, { parse_mode: 'Markdown' });
+            await bot.sendMessage(msg.chat.id, `📊 *Results for ${escapedTarget}*\n\n${results}`, { parse_mode: 'MarkdownV2' });
         } catch (error) {
             console.error('Error during single target processing:', error);
             await bot.sendMessage(msg.chat.id, 'An unexpected error occurred. Please try again later.');
         } finally {
-            delete userStates[userId]; // Reset state
+            delete userStates[userId];
         }
     }
 
-    // --- State: Awaiting Bulk Targets ---
     if (currentState === 'awaiting_bulk_targets') {
-        const targets = msg.text.trim().split('\n').filter(Boolean); // Split by line and remove empty ones
+        const targets = msg.text.trim().split('\n').filter(Boolean);
 
         if (targets.length === 0) {
             bot.sendMessage(msg.chat.id, '⚠️ No valid targets were entered. Please provide at least one username or email.');
@@ -282,7 +288,7 @@ bot.on('message', async (msg) => {
             return;
         }
 
-        await bot.sendMessage(msg.chat.id, `🚀 Starting bulk reset for *${targets.length}* targets...`, { parse_mode: 'Markdown' });
+        await bot.sendMessage(msg.chat.id, `🚀 Starting bulk reset for *${targets.length}* targets\\.\\.\\.`, { parse_mode: 'MarkdownV2' });
         
         try {
             await processBulkTargets(targets, msg.chat.id);
@@ -290,25 +296,23 @@ bot.on('message', async (msg) => {
             console.error('Error during bulk target processing:', error);
             await bot.sendMessage(msg.chat.id, 'An unexpected error occurred during the bulk process. Please try again later.');
         } finally {
-            delete userStates[userId]; // Reset state
+            delete userStates[userId];
         }
     }
 });
 
 
 // ============================================================================
-// Step 5: Start the Bot and Handle Errors
+// Step 6: Start the Bot and Handle Errors
 // ============================================================================
 
 console.log('Bot is starting up...');
 
 bot.on('polling_error', (error) => {
-    // This event is fired when the polling mechanism encounters an error.
     console.error(`[Polling Error] Code: ${error.code} - Message: ${error.message}`);
-    // A 409 conflict means another instance is running. Other errors might be network-related.
     if (error.code === 'ETELEGRAM' && error.message.includes('409 Conflict')) {
         console.error('!!! Critical Error: Another bot instance is running with the same token. Shutting down. !!!');
-        process.exit(1); // Exit the process to prevent conflict loops.
+        process.exit(1);
     }
 });
 
