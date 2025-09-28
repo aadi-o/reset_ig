@@ -1,5 +1,0 @@
-pyTelegramBotAPI
-requests
-python-dotenv
-Flask
-aiohttp
