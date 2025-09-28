@@ -1,6 +1,7 @@
-# Instagram Reset Telegram Bot (Python) - v2.3 (Web Service with URL)
-# This version adds a simple Flask web server to the bot, allowing it to be
-# deployed as a Web Service on Render and have a public URL.
+# Instagram Reset Telegram Bot (Python) - v2.4 (Bulk Reset Fix)
+# This version improves the reliability of the bulk reset feature by adding
+# network timeouts and more robust error handling to prevent the process
+# from hanging and to ensure the user is always notified of the outcome.
 
 # ============================================================================
 # Step 1: Setup and Configuration
@@ -56,11 +57,12 @@ def escape_markdown_v2(text):
 # Step 4: Instagram API Functions
 # ============================================================================
 async def make_post_request(url, data, headers):
-    """A robust wrapper for making POST requests with detailed error handling."""
-    loop = asyncio.get_event_loop()
+    """A robust wrapper for making POST requests with timeouts."""
+    loop = asyncio.get_running_loop()
     try:
+        # Add a 15-second timeout to prevent requests from hanging indefinitely
         response = await loop.run_in_executor(
-            None, lambda: requests.post(url, data=data, headers=headers)
+            None, lambda: requests.post(url, data=data, headers=headers, timeout=15)
         )
         response.raise_for_status()
         return response.json() if 'application/json' in response.headers.get('Content-Type', '') else response.text
@@ -89,10 +91,10 @@ async def send_reset_method_1(target):
 async def send_reset_method_2(target):
     """Method 2: Sends a reset link using a mobile API endpoint."""
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         profile_url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={target}"
         profile_response = await loop.run_in_executor(
-            None, lambda: requests.get(profile_url, headers={'User-Agent': INSTAGRAM_API['USER_AGENT_WEB'], 'X-IG-App-ID': INSTAGRAM_API['APP_ID']})
+            None, lambda: requests.get(profile_url, headers={'User-Agent': INSTAGRAM_API['USER_AGENT_WEB'], 'X-IG-App-ID': INSTAGRAM_API['APP_ID']}, timeout=15)
         )
         profile_response.raise_for_status()
         user_id = profile_response.json().get('data', {}).get('user', {}).get('id')
@@ -209,7 +211,8 @@ async def handle_text_input(message):
         result_message = await process_single_target(target)
         await bot.send_message(message.chat.id, result_message, parse_mode='MarkdownV2')
         
-        del user_states[user_id]
+        if user_id in user_states:
+            del user_states[user_id]
 
     elif current_state == 'awaiting_bulk_targets':
         targets = [line for line in message.text.strip().split('\n') if line]
@@ -220,10 +223,16 @@ async def handle_text_input(message):
             await bot.send_message(message.chat.id, f"❌ You entered *{len(targets)}* targets. The maximum is 50. Please reduce the list and try again.", parse_mode='MarkdownV2')
             return
 
-        await bot.send_message(message.chat.id, f"🚀 Starting bulk reset for *{len(targets)}* targets. This may take a moment.", parse_mode='MarkdownV2')
-        await process_bulk_targets(targets, message.chat.id)
-        
-        del user_states[user_id]
+        try:
+            await bot.send_message(message.chat.id, f"🚀 Starting bulk reset for *{len(targets)}* targets. This may take a moment.", parse_mode='MarkdownV2')
+            await process_bulk_targets(targets, message.chat.id)
+        except Exception as e:
+            print(f"Error during bulk processing for user {user_id}: {e}")
+            await bot.send_message(message.chat.id, "An unexpected error occurred during the bulk process. Please try again later.")
+        finally:
+            # Always clean up the user's state after the operation
+            if user_id in user_states:
+                del user_states[user_id]
 
 # ============================================================================
 # Step 7: Start the Bot and Web Server
@@ -236,9 +245,11 @@ def run_flask():
 async def main_bot_logic():
     print('Bot is starting up...')
     try:
+        # Prevents the bot from crashing on minor polling errors.
         await bot.polling(non_stop=True, request_timeout=90)
     except Exception as e:
         print(f"An unexpected error occurred in bot polling: {e}")
+        # A brief pause before attempting to restart polling.
         await asyncio.sleep(5)
 
 if __name__ == '__main__':
