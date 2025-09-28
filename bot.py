@@ -1,7 +1,6 @@
-# Instagram Reset Telegram Bot (Python) - v2.5 (Robust Bulk Processing)
-# This version fixes the bulk reset feature by sending results in smaller chunks
-# to avoid Telegram's message length limits. It also includes improved
-# error logging for better diagnostics.
+# Instagram Reset Telegram Bot (Python) - v2.7 (Hardcoded Token)
+# This script combines the web server, bot logic, and API functions into a single,
+# easy-to-manage file. The bot token is hardcoded for simple deployment.
 
 # ============================================================================
 # Step 1: Setup and Configuration
@@ -16,18 +15,10 @@ import traceback
 from flask import Flask
 from telebot.async_telebot import AsyncTeleBot
 from uuid import uuid4
-from dotenv import load_dotenv
-
-# Load environment variables from a .env file for local development
-load_dotenv()
 
 # --- Configuration ---
-BOT_TOKEN = os.getenv('BOT_TOKEN', '7852130119:AAFQ_cPJLRqOeHFgoaH7ARUU2DqkGWC_VPo')
-
-# --- Initialization ---
-bot = AsyncTeleBot(BOT_TOKEN)
-app = Flask(__name__) # Initialize the Flask web server
-user_states = {}
+# IMPORTANT: Paste your bot token directly here.
+BOT_TOKEN = "7852130119:AAFQ_cPJLRqOeHFgoaH7ARUU2DqkGWC_VPo"
 
 # Constants for Instagram API requests
 INSTAGRAM_API = {
@@ -36,17 +27,19 @@ INSTAGRAM_API = {
     'APP_ID': '936619743392459',
 }
 
+# --- Initialization ---
+bot = AsyncTeleBot(BOT_TOKEN)
+app = Flask(__name__)  # Initialize the Flask web server
+user_states = {}  # In-memory dictionary to track user states
+
 # ============================================================================
-# Step 2: Web Server Route
+# Step 2: Web Server and Utilities
 # ============================================================================
 @app.route('/')
 def home():
-    """This function runs when someone visits the root URL."""
+    """This function runs when someone visits the root URL, confirming the bot is live."""
     return "<h1>Bot is alive and running!</h1><p>You can interact with the bot on Telegram.</p>"
 
-# ============================================================================
-# Step 3: Utilities
-# ============================================================================
 def escape_markdown_v2(text):
     """Escapes special characters in a string for Telegram's MarkdownV2 parse mode."""
     if not isinstance(text, str):
@@ -55,13 +48,12 @@ def escape_markdown_v2(text):
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
 # ============================================================================
-# Step 4: Instagram API Functions
+# Step 3: Instagram API Functions
 # ============================================================================
 async def make_post_request(url, data, headers):
     """A robust wrapper for making POST requests with timeouts."""
     loop = asyncio.get_running_loop()
     try:
-        # Add a 15-second timeout to prevent requests from hanging indefinitely
         response = await loop.run_in_executor(
             None, lambda: requests.post(url, data=data, headers=headers, timeout=15)
         )
@@ -69,10 +61,10 @@ async def make_post_request(url, data, headers):
         return response.json() if 'application/json' in response.headers.get('Content-Type', '') else response.text
     except requests.exceptions.HTTPError as http_err:
         if http_err.response.status_code == 429:
-            raise Exception('Rate Limited. Please wait a while before trying again.')
+            raise Exception('Rate Limited.')
         raise Exception(f'Request failed with status code {http_err.response.status_code}.')
     except requests.exceptions.RequestException as req_err:
-        raise Exception(f'An unexpected error occurred: {req_err}')
+        raise Exception(f'An unexpected network error occurred: {req_err}')
 
 async def send_reset_method_1(target):
     """Method 1: Sends a reset link using a standard web ajax endpoint."""
@@ -126,7 +118,7 @@ async def send_reset_method_3(target):
         return {'success': False}
 
 # ============================================================================
-# Step 5: Core Bot Logic
+# Step 4: Core Bot Logic
 # ============================================================================
 async def process_single_target(target):
     """
@@ -143,14 +135,13 @@ async def process_single_target(target):
     return f"❌ Failed to send a password reset for *{escaped_target}*\\. Please double\\-check the username/email\\."
 
 async def process_bulk_targets(targets, chat_id):
-    """Processes a list of targets and sends the results in chunks to avoid message length limits."""
+    """Processes a list of targets and sends the results in chunks."""
     results_batch = []
-    CHUNK_SIZE = 10  # Send a summary message every 10 processed targets
+    CHUNK_SIZE = 10
 
     for i, target in enumerate(targets, 1):
         target = target.strip()
-        if not target:
-            continue
+        if not target: continue
         
         escaped_target = escape_markdown_v2(target)
         await bot.send_message(chat_id, f"⏳ Processing {i}/{len(targets)}: *{escaped_target}*", parse_mode='MarkdownV2')
@@ -158,24 +149,21 @@ async def process_bulk_targets(targets, chat_id):
         result_message = await process_single_target(target)
         results_batch.append(result_message)
         
-        # When the batch is full, send the chunked summary
         if i % CHUNK_SIZE == 0:
             chunk_summary = "\n".join(results_batch)
             await bot.send_message(chat_id, f"📊 *Batch Results ({i - CHUNK_SIZE + 1} - {i})*\n\n{chunk_summary}", parse_mode='MarkdownV2')
-            results_batch = []  # Reset the batch for the next chunk
+            results_batch = []
         
         await asyncio.sleep(2)
         
-    # Send any remaining results that didn't form a full chunk
     if results_batch:
         final_summary = "\n".join(results_batch)
         await bot.send_message(chat_id, f"🎉 *Final Results*\n\n{final_summary}", parse_mode='MarkdownV2')
     else:
         await bot.send_message(chat_id, "✅ *Bulk Processing Complete*\\.", parse_mode='MarkdownV2')
 
-
 # ============================================================================
-# Step 6: Bot Command and Message Handlers
+# Step 5: Bot Command and Message Handlers
 # ============================================================================
 async def show_main_menu(chat_id):
     """Sends the main welcome menu with a cleaner UI."""
@@ -241,41 +229,38 @@ async def handle_text_input(message):
         try:
             await bot.send_message(message.chat.id, f"🚀 Starting bulk reset for *{len(targets)}* targets. This may take a moment.", parse_mode='MarkdownV2')
             await process_bulk_targets(targets, message.chat.id)
-        except Exception as e:
-            # Add more detailed logging for easier debugging
+        except Exception:
             print(f"--- UNEXPECTED ERROR IN BULK PROCESSING FOR USER {user_id} ---")
             traceback.print_exc()
             print("--- END OF TRACEBACK ---")
             await bot.send_message(message.chat.id, "An unexpected error occurred during the bulk process. Please try again later.")
         finally:
-            # Always clean up the user's state after the operation
             if user_id in user_states:
                 del user_states[user_id]
 
 # ============================================================================
-# Step 7: Start the Bot and Web Server
+# Step 6: Start the Bot and Web Server
 # ============================================================================
 def run_flask():
-    # This function runs the web server. It needs to be in a separate thread.
-    # The host '0.0.0.0' is required for Render to connect to it.
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    """Runs the Flask web server in a background thread."""
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
 
 async def main_bot_logic():
+    """Starts the bot's main polling loop."""
     print('Bot is starting up...')
     try:
-        # Prevents the bot from crashing on minor polling errors.
         await bot.polling(non_stop=True, request_timeout=90)
     except Exception as e:
         print(f"An unexpected error occurred in bot polling: {e}")
-        # A brief pause before attempting to restart polling.
         await asyncio.sleep(5)
 
 if __name__ == '__main__':
-    # Start the Flask server in a background thread
-    flask_thread = threading.Thread(target=run_flask)
+    # Start the Flask server in a separate, non-blocking thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     
-    # Start the bot's polling logic
+    # Start the main asynchronous logic for the bot
     print('Web server and bot are running successfully.')
     asyncio.run(main_bot_logic())
 
