@@ -1,7 +1,7 @@
-# Instagram Reset Telegram Bot (Python) - v2.4 (Bulk Reset Fix)
-# This version improves the reliability of the bulk reset feature by adding
-# network timeouts and more robust error handling to prevent the process
-# from hanging and to ensure the user is always notified of the outcome.
+# Instagram Reset Telegram Bot (Python) - v2.5 (Robust Bulk Processing)
+# This version fixes the bulk reset feature by sending results in smaller chunks
+# to avoid Telegram's message length limits. It also includes improved
+# error logging for better diagnostics.
 
 # ============================================================================
 # Step 1: Setup and Configuration
@@ -12,6 +12,7 @@ import asyncio
 import requests
 import telebot
 import threading
+import traceback
 from flask import Flask
 from telebot.async_telebot import AsyncTeleBot
 from uuid import uuid4
@@ -142,22 +143,36 @@ async def process_single_target(target):
     return f"❌ Failed to send a password reset for *{escaped_target}*\\. Please double\\-check the username/email\\."
 
 async def process_bulk_targets(targets, chat_id):
-    """Processes a list of targets and sends a final summary."""
-    all_results = []
-    for i, target in enumerate(targets):
+    """Processes a list of targets and sends the results in chunks to avoid message length limits."""
+    results_batch = []
+    CHUNK_SIZE = 10  # Send a summary message every 10 processed targets
+
+    for i, target in enumerate(targets, 1):
         target = target.strip()
-        if not target: continue
+        if not target:
+            continue
         
         escaped_target = escape_markdown_v2(target)
-        await bot.send_message(chat_id, f"⏳ Processing {i + 1}/{len(targets)}: *{escaped_target}*", parse_mode='MarkdownV2')
+        await bot.send_message(chat_id, f"⏳ Processing {i}/{len(targets)}: *{escaped_target}*", parse_mode='MarkdownV2')
         
         result_message = await process_single_target(target)
-        all_results.append(result_message)
+        results_batch.append(result_message)
+        
+        # When the batch is full, send the chunked summary
+        if i % CHUNK_SIZE == 0:
+            chunk_summary = "\n".join(results_batch)
+            await bot.send_message(chat_id, f"📊 *Batch Results ({i - CHUNK_SIZE + 1} - {i})*\n\n{chunk_summary}", parse_mode='MarkdownV2')
+            results_batch = []  # Reset the batch for the next chunk
         
         await asyncio.sleep(2)
         
-    summary = "\n".join(all_results)
-    await bot.send_message(chat_id, f"🎉 *Bulk Processing Complete* 🎉\n\n{summary}", parse_mode='MarkdownV2')
+    # Send any remaining results that didn't form a full chunk
+    if results_batch:
+        final_summary = "\n".join(results_batch)
+        await bot.send_message(chat_id, f"🎉 *Final Results*\n\n{final_summary}", parse_mode='MarkdownV2')
+    else:
+        await bot.send_message(chat_id, "✅ *Bulk Processing Complete*\\.", parse_mode='MarkdownV2')
+
 
 # ============================================================================
 # Step 6: Bot Command and Message Handlers
@@ -227,7 +242,10 @@ async def handle_text_input(message):
             await bot.send_message(message.chat.id, f"🚀 Starting bulk reset for *{len(targets)}* targets. This may take a moment.", parse_mode='MarkdownV2')
             await process_bulk_targets(targets, message.chat.id)
         except Exception as e:
-            print(f"Error during bulk processing for user {user_id}: {e}")
+            # Add more detailed logging for easier debugging
+            print(f"--- UNEXPECTED ERROR IN BULK PROCESSING FOR USER {user_id} ---")
+            traceback.print_exc()
+            print("--- END OF TRACEBACK ---")
             await bot.send_message(message.chat.id, "An unexpected error occurred during the bulk process. Please try again later.")
         finally:
             # Always clean up the user's state after the operation
